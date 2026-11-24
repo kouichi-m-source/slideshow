@@ -41,7 +41,7 @@ def natural_key(s):
 class App:
     def __init__(self, root):
         self.root = root
-        root.title("スライドショー")
+        root.title("image-slideshow")
         try:
             root.iconbitmap(resource_path("icon.ico"))
         except Exception:
@@ -264,7 +264,7 @@ class App:
         self.files.clear()
         self.fileset.clear()
         self.idx = 0
-        self.root.title("スライドショー")
+        self.root.title("image-slideshow")
         self.status.set("リセットしました。☰メニューからフォルダ/ファイルを追加してください")
 
     def show_help(self):
@@ -308,7 +308,7 @@ class App:
         if not path:
             self.status.set("画像がありません。「＋フォルダ」で追加してください")
             return
-        self.root.title(f"スライドショー - {os.path.basename(path)}")
+        self.root.title(f"image-slideshow - {os.path.basename(path)}")
         self.status.set(f"{self.idx + 1} / {len(self.files)}   {path}")
         try:
             with Image.open(path) as im:
