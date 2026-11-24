@@ -2,7 +2,7 @@
 """画像・GIFスライドショー (Tkinter + Pillow)
 
 必要ライブラリ:  pip install pillow send2trash
-操作:  ←/→ 送り戻し / Space 自動送り / Delete 削除(ゴミ箱) / F2 名前変更 / Enter 他のプログラムで開く
+操作:  ←/→ 送り戻し / Space 自動送り / Delete 削除(ゴミ箱) / F2 名前変更 / Enter エクスプローラーでファイルを選択
 """
 import os
 import re
@@ -105,16 +105,17 @@ class App:
         btn("◀ 戻る", self.prev)
         btn("送る ▶", self.next)
         btn("🗑 削除", self.delete_current)
-        btn("↗ 開く", self.open_external)
+        btn("📁 ファイル選択", self.reveal_in_explorer)
         btn("？ キー操作", self.show_help)
 
-        # ボタンが常にすべて見えるよう、最小幅をツールバーの必要幅に合わせる
+        # ボタンが常にすべて見えるよう、最小幅をボタン列の必要幅に合わせる
         self.root.update_idletasks()
         self.root.minsize(bar.winfo_reqwidth() + 8, 320)
 
+        # 枚数・位置・ファイル名はボタンの右側に表示。幅が足りないときは右端が切れる
         self.status = tk.StringVar(value="フォルダを追加してください")
-        ttk.Label(self.root, textvariable=self.status, anchor="w",
-                  padding=(6, 2)).pack(side="bottom", fill="x")
+        ttk.Label(bar, textvariable=self.status, anchor="w", width=1).pack(
+            side="left", fill="x", expand=True, padx=(10, 0))
 
         self.canvas = tk.Canvas(self.root, bg=BG, highlightthickness=0)
         self.canvas.pack(fill="both", expand=True)
@@ -131,7 +132,7 @@ class App:
         r.bind("<space>", lambda e: self.toggle_auto())
         r.bind("<Delete>", lambda e: self.delete_current())
         r.bind("<F2>", lambda e: self.rename_current())
-        r.bind("<Return>", lambda e: self.open_external())
+        r.bind("<Return>", lambda e: self.reveal_in_explorer())
 
     # ---------------- ファイル追加 ----------------
     def _add_paths(self, paths):
@@ -161,6 +162,8 @@ class App:
         if n and len(self.files) == n:
             self.idx = 0
             self.show()
+            if self.auto_job is None:
+                self._start_auto()
 
     def add_files(self):
         fs = filedialog.askopenfilenames(
@@ -173,6 +176,8 @@ class App:
         if n and first:
             self.idx = 0
             self.show()
+            if self.auto_job is None:
+                self._start_auto()
 
     # ---------------- 並び替え ----------------
     def apply_sort(self, keep=None):
@@ -218,8 +223,11 @@ class App:
         if self.auto_job is not None:
             self._stop_auto()
         else:
-            self.auto_btn.config(text="■ 停止")
-            self._schedule_auto()
+            self._start_auto()
+
+    def _start_auto(self):
+        self.auto_btn.config(text="■ 停止")
+        self._schedule_auto()
 
     def _stop_auto(self):
         if self.auto_job is not None:
@@ -276,7 +284,7 @@ class App:
                 "Space                      自動送り 開始/停止\n"
                 "Delete                     ゴミ箱へ削除\n"
                 "F2                         名前変更\n"
-                "Enter                      他のプログラムで開く")
+                "Enter                      エクスプローラーでファイルを選択")
         ttk.Label(w, text=text, font=("MS Gothic", 10), justify="left",
                   padding=16).pack()
         ttk.Button(w, text="閉じる", command=w.destroy).pack(pady=(0, 12))
@@ -309,7 +317,7 @@ class App:
             self.status.set("画像がありません。「＋フォルダ」で追加してください")
             return
         self.root.title(f"image-slideshow - {os.path.basename(path)}")
-        self.status.set(f"{self.idx + 1} / {len(self.files)}   {path}")
+        self.status.set(f"{self.idx + 1} / {len(self.files)}   {os.path.basename(path)}")
         try:
             with Image.open(path) as im:
                 if getattr(im, "is_animated", False) and im.n_frames > 1:
@@ -409,19 +417,20 @@ class App:
         self.fileset.add(new_path)
         self.show()
 
-    def open_external(self):
+    def reveal_in_explorer(self):
+        """エクスプローラーで現在のファイルを選択した状態にする(右クリックで各種操作できる)"""
         path = self.current_path()
         if not path:
             return
         try:
             if sys.platform.startswith("win"):
-                os.startfile(path)
+                subprocess.Popen(f'explorer /select,"{os.path.normpath(path)}"')
             elif sys.platform == "darwin":
-                subprocess.Popen(["open", path])
+                subprocess.Popen(["open", "-R", path])
             else:
-                subprocess.Popen(["xdg-open", path])
+                subprocess.Popen(["xdg-open", os.path.dirname(path)])
         except Exception as ex:
-            messagebox.showerror("開けません", str(ex))
+            messagebox.showerror("エクスプローラーを開けません", str(ex))
 
 
 if __name__ == "__main__":
