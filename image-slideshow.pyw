@@ -7,6 +7,7 @@
 import os
 import re
 import sys
+import json
 import random
 import subprocess
 import tkinter as tk
@@ -22,10 +23,25 @@ except ImportError:  # 未インストール時は削除ボタンで案内
 EXTS = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"}
 SORTS = ["ファイル名順", "更新日順", "ランダム"]
 INTERVALS = [1, 2, 3, 5, 10, 30, 60]
+TOPS = ["アクティブ時手前表示", "常時手前表示"]   # 表示メニュー(既定は先頭)
 DEFAULT_SORT = "ランダム"          # 起動時の並び
 MENU_FONT = ("Yu Gothic UI", 13)   # メニューの行の高さ(行間)はフォントサイズで決まる
 BG = "#202020"
 INVALID = re.compile(r'[\\/:*?"<>|]')
+
+
+def settings_path():
+    base = os.environ.get("APPDATA") or os.path.join(os.path.expanduser("~"), ".config")
+    return os.path.join(base, "image-slideshow", "settings.json")
+
+
+def load_settings():
+    try:
+        with open(settings_path(), encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
 
 
 def resource_path(name):
@@ -62,8 +78,10 @@ class App:
         self.photo = None
         self.cur_size = (0, 0)
 
+        self.settings = load_settings()
         self._build_ui()
         self._bind_keys()
+        self.apply_topmost(save=False)
         root.after(200, self.add_folder)
 
     # ---------------- UI ----------------
@@ -76,8 +94,18 @@ class App:
             b.pack(side="left", padx=2)
             return b
 
-        self.interval = tk.StringVar(value="3")
-        self.sort_var = tk.StringVar(value=DEFAULT_SORT)
+        iv = str(self.settings.get("interval", "3"))
+        try:
+            iv = iv if 0.2 <= float(iv) <= 600 else "3"
+        except ValueError:
+            iv = "3"
+        sv = self.settings.get("sort", DEFAULT_SORT)
+        tv = self.settings.get("topmost", TOPS[0])
+        self.interval = tk.StringVar(value=iv)
+        self.sort_var = tk.StringVar(value=sv if sv in SORTS else DEFAULT_SORT)
+        self.top_var = tk.StringVar(value=tv if tv in TOPS else TOPS[0])
+        self._clicks = 0
+        self._click_job = None
 
         # ☰ メニュー
         menu = tk.Menu(self.root, tearoff=0, font=MENU_FONT)
@@ -89,15 +117,20 @@ class App:
         im = tk.Menu(menu, tearoff=0, font=MENU_FONT)
         for s in INTERVALS:
             im.add_radiobutton(label=f"{s}秒", variable=self.interval, value=str(s),
-                               command=self._restart_auto)
+                               command=self._interval_changed)
         im.add_separator()
         im.add_command(label="秒数を指定…", command=self.ask_interval)
         menu.add_cascade(label="自動送りの間隔", menu=im)
         sm = tk.Menu(menu, tearoff=0, font=MENU_FONT)
         for s in SORTS:
             sm.add_radiobutton(label=s, variable=self.sort_var, value=s,
-                               command=self.apply_sort)
+                               command=self._sort_changed)
         menu.add_cascade(label="並び", menu=sm)
+        tm = tk.Menu(menu, tearoff=0, font=MENU_FONT)
+        for s in TOPS:
+            tm.add_radiobutton(label=s, variable=self.top_var, value=s,
+                               command=self.apply_topmost)
+        menu.add_cascade(label="表示", menu=tm)
         mb = ttk.Menubutton(bar, text="☰ メニュー", menu=menu)
         mb.pack(side="left", padx=2)
 
@@ -124,6 +157,7 @@ class App:
                          lambda e: self.prev() if e.delta > 0 else self.next())
         self.canvas.bind("<Button-4>", lambda e: self.prev())
         self.canvas.bind("<Button-5>", lambda e: self.next())
+        self.canvas.bind("<Button-1>", self._on_click)
 
     def _bind_keys(self):
         r = self.root
@@ -249,6 +283,52 @@ class App:
             self.root.after_cancel(self.auto_job)
             self._schedule_auto()
 
+    # ---------------- 設定の保存 ----------------
+    def save_settings(self):
+        d = {"interval": self.interval.get(), "sort": self.sort_var.get(),
+             "topmost": self.top_var.get()}
+        try:
+            path = settings_path()
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(d, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def _interval_changed(self):
+        self._restart_auto()
+        self.save_settings()
+
+    def _sort_changed(self):
+        self.apply_sort()
+        self.save_settings()
+
+    def apply_topmost(self, save=True):
+        try:
+            self.root.attributes("-topmost", self.top_var.get() == TOPS[1])
+        except Exception:
+            pass
+        if save:
+            self.save_settings()
+
+    # ---------------- 画像クリック ----------------
+    def _on_click(self, _e):
+        """1回: 自動送りの停止/再開(約0.4秒待って判定) / 2回: 何もしない / 3回: エクスプローラーで選択"""
+        self._clicks += 1
+        if self._click_job is not None:
+            self.root.after_cancel(self._click_job)
+            self._click_job = None
+        if self._clicks >= 3:
+            self._clicks = 0
+            self.reveal_in_explorer()
+            return
+        self._click_job = self.root.after(400, self._click_done)
+
+    def _click_done(self):
+        n, self._clicks, self._click_job = self._clicks, 0, None
+        if n == 1 and self.files:
+            self.toggle_auto()
+
     def ask_interval(self):
         try:
             cur = float(self.interval.get())
@@ -259,6 +339,7 @@ class App:
         if v is not None:
             self.interval.set(f"{v:g}")
             self._restart_auto()
+            self.save_settings()
 
     # ---------------- リセット・ヘルプ ----------------
     def reset_list(self):
@@ -284,7 +365,10 @@ class App:
                 "Space                      自動送り 開始/停止\n"
                 "Delete                     ゴミ箱へ削除\n"
                 "F2                         名前変更\n"
-                "Enter                      エクスプローラーでファイルを選択")
+                "Enter                      エクスプローラーでファイルを選択\n"
+                "画像をクリック             自動送り 停止/再開\n"
+                "画像をトリプルクリック     エクスプローラーでファイルを選択\n"
+                "(ダブルクリックは何もしません)")
         ttk.Label(w, text=text, font=("MS Gothic", 10), justify="left",
                   padding=16).pack()
         ttk.Button(w, text="閉じる", command=w.destroy).pack(pady=(0, 12))
