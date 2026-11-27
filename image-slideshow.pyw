@@ -8,6 +8,7 @@ import os
 import re
 import sys
 import json
+import time
 import random
 import subprocess
 import tkinter as tk
@@ -77,6 +78,9 @@ class App:
         self.frame_i = 0
         self.photo = None
         self.cur_size = (0, 0)
+        self.fullscreen = False
+        self._cursor_job = None
+        self._last_xy = None
 
         self.settings = load_settings()
         self._build_ui()
@@ -88,6 +92,7 @@ class App:
     def _build_ui(self):
         bar = ttk.Frame(self.root, padding=4)
         bar.pack(side="top", fill="x")
+        self.bar = bar
 
         def btn(text, cmd):
             b = ttk.Button(bar, text=text, command=cmd)
@@ -130,7 +135,8 @@ class App:
         for s in TOPS:
             tm.add_radiobutton(label=s, variable=self.top_var, value=s,
                                command=self.apply_topmost)
-        menu.add_cascade(label="表示", menu=tm)
+        menu.add_cascade(label="ウィンドウ手前表示", menu=tm)
+        menu.add_command(label="全画面表示  (F11)", command=self.enter_fullscreen)
         mb = ttk.Menubutton(bar, text="☰ メニュー", menu=menu)
         mb.pack(side="left", padx=2)
 
@@ -158,6 +164,7 @@ class App:
         self.canvas.bind("<Button-4>", lambda e: self.prev())
         self.canvas.bind("<Button-5>", lambda e: self.next())
         self.canvas.bind("<Button-1>", self._on_click)
+        self.canvas.bind("<Motion>", self._on_motion)
 
     def _bind_keys(self):
         r = self.root
@@ -167,6 +174,8 @@ class App:
         r.bind("<Delete>", lambda e: self.delete_current())
         r.bind("<F2>", lambda e: self.rename_current())
         r.bind("<Return>", lambda e: self.reveal_in_explorer())
+        r.bind("<F11>", lambda e: self.toggle_fullscreen())
+        r.bind("<Escape>", lambda e: self.exit_fullscreen())
 
     # ---------------- ファイル追加 ----------------
     def _add_paths(self, paths):
@@ -313,7 +322,12 @@ class App:
 
     # ---------------- 画像クリック ----------------
     def _on_click(self, _e):
-        """1回: 自動送りの停止/再開(約0.4秒待って判定) / 2回: 何もしない / 3回: エクスプローラーで選択"""
+        """1回: 自動送りの停止/再開(約0.4秒待って判定) / 2回: 何もしない / 3回: エクスプローラーで選択
+        全画面中は、1回のクリックで解除する"""
+        if self.fullscreen:
+            if time.time() - self._fs_at > 0.4:   # 全画面にした直後のクリックは無視
+                self.exit_fullscreen()
+            return
         self._clicks += 1
         if self._click_job is not None:
             self.root.after_cancel(self._click_job)
@@ -323,6 +337,63 @@ class App:
             self.reveal_in_explorer()
             return
         self._click_job = self.root.after(400, self._click_done)
+
+    # ---------------- 全画面表示 ----------------
+    def toggle_fullscreen(self):
+        if self.fullscreen:
+            self.exit_fullscreen()
+        else:
+            self.enter_fullscreen()
+
+    def enter_fullscreen(self):
+        if self.fullscreen:
+            return
+        self._prev_geom = self.root.geometry()
+        self._prev_state = self.root.state()
+        self.fullscreen = True
+        self._fs_at = time.time()
+        self.bar.pack_forget()
+        self.root.attributes("-fullscreen", True)
+        self._arm_cursor_hide()
+
+    def exit_fullscreen(self):
+        if not self.fullscreen:
+            return
+        self.fullscreen = False
+        self.root.attributes("-fullscreen", False)
+        self.bar.pack(side="top", fill="x", before=self.canvas)
+        try:
+            if self._prev_state == "zoomed":
+                self.root.state("zoomed")
+            else:
+                self.root.state("normal")
+                self.root.geometry(self._prev_geom)
+        except Exception:
+            pass
+        if self._cursor_job is not None:
+            self.root.after_cancel(self._cursor_job)
+            self._cursor_job = None
+        self.canvas.config(cursor="")
+
+    def _arm_cursor_hide(self):
+        """全画面中、マウスを約2.5秒動かさないとカーソルを消す"""
+        if self._cursor_job is not None:
+            self.root.after_cancel(self._cursor_job)
+        self._cursor_job = self.root.after(2500, self._hide_cursor)
+
+    def _hide_cursor(self):
+        self._cursor_job = None
+        if self.fullscreen:
+            self.canvas.config(cursor="none")
+
+    def _on_motion(self, e):
+        if not self.fullscreen:
+            return
+        if self._last_xy == (e.x, e.y):   # カーソル変更で出る見かけ上の動きは無視
+            return
+        self._last_xy = (e.x, e.y)
+        self.canvas.config(cursor="")
+        self._arm_cursor_hide()
 
     def _click_done(self):
         n, self._clicks, self._click_job = self._clicks, 0, None
@@ -366,6 +437,8 @@ class App:
                 "Delete                     ゴミ箱へ削除\n"
                 "F2                         名前変更\n"
                 "Enter                      エクスプローラーでファイルを選択\n"
+                "F11                        全画面表示の切替\n"
+                "Esc / 全画面中にクリック   全画面を解除\n"
                 "画像をクリック             自動送り 停止/再開\n"
                 "画像をトリプルクリック     エクスプローラーでファイルを選択\n"
                 "(ダブルクリックは何もしません)")
